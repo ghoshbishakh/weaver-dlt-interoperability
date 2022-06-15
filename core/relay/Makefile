@@ -1,6 +1,5 @@
-DOCKER_IMAGE_NAME ?= dlt-interop/relay
-DOCKER_TAG ?= latest
-DOCKER_REGISTRY ?= res-dlt-interop-docker-local.na.artifactory.swg-devops.com
+include Makefile.variables.docker
+
 PROTOS_TAG ?= v0.7
 
 DOCKER_IMAGE_ALL = $(DOCKER_IMAGE_NAME):$(DOCKER_TAG)
@@ -11,6 +10,7 @@ DOCKER_IMAGE_DRIVER = $(DOCKER_IMAGE_NAME)-driver:$(DOCKER_TAG)
 COMMIT = $(shell git log -1 --oneline | cut -d ' ' -f 1)
 BRANCH = $(shell git rev-parse --abbrev-ref HEAD)
 TIMESTAMP = $(shell date +%FT%T%z)
+COMPOSE_ARG ?=
 
 .PHONY: all
 all: 	build-local
@@ -42,7 +42,7 @@ build:	protos
 .PHONY:	build-server
 build-server: protos fingerprint.json
 	@echo -e "\033[1mBUILD\033[0m - Building Docker image (relay server)..."
-	docker build  --build-arg COMMIT=$(COMMIT) --build-arg BRANCH=$(BRANCH) --build-arg PROTOS_VERSION=$(PROTOS_TAG) --build-arg VERSION=$(DOCKER_TAG) -t $(DOCKER_IMAGE_SERVER) -f Dockerfile.server . 
+	docker build  --build-arg COMMIT=$(COMMIT) --build-arg BRANCH=$(BRANCH) --build-arg PROTOS_VERSION=$(PROTOS_TAG) --build-arg VERSION=$(DOCKER_TAG) --build-arg GIT_URL=$(GIT_URL) -t $(DOCKER_IMAGE_SERVER) -f Dockerfile.server . 
 
 .PHONY: build-client
 build-client: protos fingerprint.json
@@ -83,7 +83,7 @@ build-local:	protos-local
 .PHONY:	build-server-local
 build-server-local: protos-local fingerprint.json
 	@echo -e "\033[1mBUILD\033[0m - Building Docker image (relay server)..."
-	docker build  --build-arg COMMIT=$(COMMIT) --build-arg BRANCH=$(BRANCH) --build-arg PROTOS_VERSION=$(PROTOS_TAG) --build-arg VERSION=$(DOCKER_TAG) -t $(DOCKER_IMAGE_SERVER) -f Dockerfile.server .
+	docker build  --build-arg COMMIT=$(COMMIT) --build-arg BRANCH=$(BRANCH) --build-arg PROTOS_VERSION=$(PROTOS_TAG) --build-arg VERSION=$(DOCKER_TAG) --build-arg GIT_URL=$(GIT_URL) -t $(DOCKER_IMAGE_SERVER) -f Dockerfile.server .
 
 .PHONY: build-client-local
 build-client-local: protos-local fingerprint.json
@@ -105,9 +105,8 @@ build-allinone-local: protos-local fingerprint.json
 .PHONY: build-images-local
 build-images-local: build-allinone-local build-driver-local build-server-local build-client-local
 
-
 .PHONY: push-server
-push-server: build-server
+push-server: build-server-local
 	@echo -e "\033[1mPUSH\033[0m - Pushing Docker image (relay server)..."
 	docker tag $(DOCKER_IMAGE_SERVER) $(DOCKER_REGISTRY)/$(DOCKER_IMAGE_SERVER)
 	docker push $(DOCKER_REGISTRY)/$(DOCKER_IMAGE_SERVER)
@@ -141,17 +140,25 @@ pushi-images: push-server push-client push-driver push-allinone
 .PHONY: start
 start:
 	docker network create relay || true
-	docker-compose up -d
+	docker-compose $(COMPOSE_ARG) up -d
 # Starts an instance of the relay container.
 #
 .PHONY: start-server
 start-server:
 	docker network create relay || true
-	docker-compose up -d relay-server
+	docker-compose $(COMPOSE_ARG) up -d relay-server
 
 .PHONY: stop
 stop:
-	docker-compose down
+	docker-compose $(COMPOSE_ARG) down
+	
+.PHONY: convert-compose-method1
+convert-compose-method1:
+	./scripts/convert-compose.sh 1
+	
+.PHONY: convert-compose-method2
+convert-compose-method2:
+	./scripts/convert-compose.sh 2
 
 # Cleans up all the build artifacts.
 #
@@ -170,3 +177,7 @@ clean:
 	-docker rmi $(DOCKER_REGISTRY)/$(DOCKER_IMAGE_ALL)
 	-docker rmi $(DOCKER_IMAGE_ALL)
 	cargo clean
+
+update-pkgs:
+	cargo update -p nom
+	cargo update -p lexical-core

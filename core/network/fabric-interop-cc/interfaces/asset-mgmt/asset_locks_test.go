@@ -21,7 +21,7 @@ import (
     "github.com/hyperledger/fabric-chaincode-go/shimtest"
     pb "github.com/hyperledger/fabric-protos-go/peer"
     "github.com/golang/protobuf/proto"
-    "github.com/hyperledger-labs/weaver-dlt-interoperability/core/network/fabric-interop-cc/interfaces/asset-mgmt/protos-go/common"
+    "github.com/hyperledger-labs/weaver-dlt-interoperability/common/protos-go/common"
     am "github.com/hyperledger-labs/weaver-dlt-interoperability/core/network/fabric-interop-cc/interfaces/asset-mgmt"
 )
 
@@ -81,7 +81,7 @@ func (cc *InteropCC) Invoke(stub shim.ChaincodeStubInterface) pb.Response {
         assetAgreement := &common.FungibleAssetExchangeAgreement{}
         arg0, _ := base64.StdEncoding.DecodeString(args[0])
         _ = proto.Unmarshal([]byte(arg0), assetAgreement)
-	val := assetAgreement.Type + ":" + strconv.Itoa(int(assetAgreement.NumUnits)) + ":" + string(caller) + ":" + assetAgreement.Recipient
+        val := assetAgreement.Type + ":" + strconv.Itoa(int(assetAgreement.NumUnits)) + ":" + string(caller) + ":" + assetAgreement.Recipient
         contractId := generateSHA256HashInBase64Form(val)
         cc.fungibleAssetLockMap[contractId] = val
 	if cc.fungibleAssetLockedCount[assetAgreement.Type] == 0 {
@@ -973,6 +973,7 @@ func TestAssetClaim(t *testing.T) {
     hash := []byte("MBQGA1UEBxMNU2FuIEZyYW5jaXNjbzEPMA0GA1UECxMGY2xpZW50MSQwIgYDVQQD")
     hashPreimage := []byte("YW5jaXNjbzEeMBwGA1UE")
     claimInfoHTLC := &common.AssetClaimHTLC {
+        HashMechanism: common.HashMechanism_SHA256,
         HashPreimageBase64: nil,
     }
     claimInfoBytes, _ := proto.Marshal(claimInfoHTLC)
@@ -1041,6 +1042,7 @@ func TestAssetClaim(t *testing.T) {
     // Test success
     // First, lock an asset
     lockInfoHTLC := &common.AssetLockHTLC {
+        HashMechanism: common.HashMechanism_SHA256,
         HashBase64: hash,
         ExpiryTimeSecs: 0,
     }

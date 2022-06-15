@@ -1,21 +1,36 @@
-FROM node:10
+ARG BUILD_TAG
+
+# Local Build
+# FROM node:14 AS builder-local
+# 
+# WORKDIR /fabric-driver
+
+# ADD protos-js /fabric-driver/protos-js
+
+# Remote build
+FROM node:14 AS builder-remote
 
 WORKDIR /fabric-driver
 
-ADD . /fabric-driver
-# Uncomment depending on the name of the network
-# ADD config/wallet-apactfn /fabric-driver/wallet-apactfn
-# ADD config/wallet-wtln /fabric-driver/wallet-wtln
+ADD .npmrc .
 
-# Setup protoc
-# RUN apt-get update && apt-get install curl
-RUN curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v3.12.1/protoc-3.12.1-linux-x86_64.zip
-RUN mkdir /opt/protoc
-RUN unzip protoc-3.12.1-linux-x86_64.zip -d /opt/protoc
-ENV PATH="/opt/protoc/bin:${PATH}"
+# Common Build for both
+FROM builder-${BUILD_TAG} AS prod
 
-# Setup fabric driver
+ADD package.json .
 
 RUN npm install --unsafe-perm
-RUN npm run postinstall
+
+ADD patches /fabric-driver/patches
+ADD server /fabric-driver/server
+ADD config.json .
+ADD temp.pem .
+ADD tsconfig.json .
+ADD .eslintrc .
+ADD .prettierrc .
+
 RUN npm run build
+RUN npm run postinstall
+
+ARG GIT_URL
+LABEL org.opencontainers.image.source ${GIT_URL}

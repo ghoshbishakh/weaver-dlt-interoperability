@@ -4,14 +4,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-package com.cordaDriver
+package com.weaver.corda.driver
 
-import common.ack.AckOuterClass
-import common.query.QueryOuterClass
-import driver.driver.DriverCommunicationGrpcKt
+import java.io.File
 import io.grpc.Server
 import io.grpc.ServerBuilder
 import kotlinx.coroutines.*
+
+import com.weaver.protos.common.ack.AckOuterClass
+import com.weaver.protos.common.query.QueryOuterClass
+import com.weaver.protos.driver.driver.DriverCommunicationGrpcKt
 
 /**
  * The GrpcServer is used by the Corda driver to listen for requests for statefrom the relay.
@@ -20,10 +22,24 @@ import kotlinx.coroutines.*
  * dispatching them to the correct network node and returning an Ack to the requesting gRPC client.
  */
 class GrpcServer(private val port: Int) {
-    val server: Server = ServerBuilder
-        .forPort(port)
-        .addService(GrpcService())
-        .build()
+    val server: Server
+    val useTlsForDriver = (System.getenv("DRIVER_TLS")?.toBoolean() ?: false)
+
+    init {
+        if (useTlsForDriver) {
+            println("Starting Corda driver gRPC server with TLS")
+            server = ServerBuilder
+                .forPort(port)
+                .useTransportSecurity(File(System.getenv("DRIVER_TLS_CERT_PATH")?.toString() ?: ""), File(System.getenv("DRIVER_TLS_KEY_PATH")?.toString() ?: ""))
+                .addService(GrpcService())
+                .build()
+        } else {
+            server = ServerBuilder
+                .forPort(port)
+                .addService(GrpcService())
+                .build()
+        }
+    }
 
     /**
      * The start() method is used to bring up the gRPC server of the driver.
@@ -69,7 +85,7 @@ class GrpcServer(private val port: Int) {
         override suspend fun requestDriverState(request: QueryOuterClass.Query): AckOuterClass.Ack {
             println("Request received with request: $request")
             val ack = AckOuterClass.Ack.newBuilder()
-                .setStatus(common.ack.AckOuterClass.Ack.STATUS.OK)
+                .setStatus(AckOuterClass.Ack.STATUS.OK)
                 .setRequestId(request.requestId)
                 .setMessage("Received query with request id ${request.requestId}")
                 .build()

@@ -15,7 +15,7 @@ import (
 
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 	log "github.com/sirupsen/logrus"
-	"github.com/hyperledger-labs/weaver-dlt-interoperability/core/network/fabric-interop-cc/contracts/interop/protos-go/common"
+	"github.com/hyperledger-labs/weaver-dlt-interoperability/common/protos-go/common"
 )
 
 const accessControlObjectType = "accessControl"
@@ -135,15 +135,29 @@ func verifyAccessToCC(s *SmartContract, ctx contractapi.TransactionContextInterf
 	for _, rule := range acp.Rules {
 		if rule.Resource == viewAddressString || (validPatternString(rule.Resource) && isPatternAndAddressMatch(rule.Resource, viewAddressString)) {
 			// TODO: Check if these will be the same format (Or convert to matching formats at some point)
-			// TODO: Need to use principalType and perform different validation for type "certificate" and "ca". Atm code assumes its a certificate
-			if query.Certificate == rule.Principal {
+			// TODO: Need to use principalType and perform different validation for type "certificate" and "ca".
+			// Code below assumes that requestor's membership has already been authenticated earlier if the type is "ca"
+			if (rule.PrincipalType == "certificate" && query.Certificate == rule.Principal) {
 				// Break loop as cert is valid.
+				log.Infof("Access Control Policy PERMITS the request '%s' from '%s:%s'", viewAddressString, query.RequestingNetwork, query.Certificate)
+				return nil
+			}
+			if (rule.PrincipalType == "ca" && query.RequestingOrg == rule.Principal) {
+				// Break loop as cert is valid.
+				log.Infof("Access Control Policy PERMITS the request '%s' from '%s:%s'", viewAddressString, query.RequestingNetwork, query.RequestingOrg)
 				return nil
 			}
 		}
 
 	}
-	errorMessage := fmt.Sprintf("Access Control Policy DOES NOT PERMIT the following request: %s", viewAddressString)
+	var errorMessage string
+	if (query.Certificate != "") {
+        errorMessage = fmt.Sprintf("Access Control Policy DOES NOT PERMIT the request '%s' from '%s:%s'", viewAddressString, query.RequestingNetwork, query.Certificate)
+	} else if (query.RequestingOrg != "") {
+        errorMessage = fmt.Sprintf("Access Control Policy DOES NOT PERMIT the request '%s' from '%s:%s'", viewAddressString, query.RequestingNetwork, query.RequestingOrg)
+	} else {
+		errorMessage = fmt.Sprintf("Access Control Policy DOES NOT PERMIT the request '%s' from a foreign entity", viewAddressString)
+	}
 	log.Error(errorMessage)
 	return errors.New(errorMessage)
 

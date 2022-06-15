@@ -7,6 +7,9 @@
 package main
 
 import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 
@@ -16,9 +19,9 @@ import (
 	"github.com/hyperledger/fabric-protos-go/msp"
 	"github.com/hyperledger/fabric-protos-go/peer"
 	log "github.com/sirupsen/logrus"
-	"github.com/hyperledger-labs/weaver-dlt-interoperability/core/network/fabric-interop-cc/contracts/interop/protos-go/common"
-	"github.com/hyperledger-labs/weaver-dlt-interoperability/core/network/fabric-interop-cc/contracts/interop/protos-go/corda"
-	"github.com/hyperledger-labs/weaver-dlt-interoperability/core/network/fabric-interop-cc/contracts/interop/protos-go/fabric"
+	"github.com/hyperledger-labs/weaver-dlt-interoperability/common/protos-go/common"
+	"github.com/hyperledger-labs/weaver-dlt-interoperability/common/protos-go/corda"
+	"github.com/hyperledger-labs/weaver-dlt-interoperability/common/protos-go/fabric"
 	protoV2 "google.golang.org/protobuf/proto"
 )
 
@@ -26,29 +29,127 @@ type interop interface {
 	WriteExternalState(state string) error
 }
 
-// WriteExternalState flow is used to process a response from a foreign network for state.
-// 1. Verify Proofs that are returned
-// 2. Call application chaincode
-func (s *SmartContract) WriteExternalState(ctx contractapi.TransactionContextInterface, applicationID string, applicationChannel string, applicationFunction string, applicationArgs []string, address string, b64ViewProto string) error {
+// Extract data (i.e., query response) from view
+func ExtractAndValidateDataFromView(view *common.View, b64ViewContent string) ([]byte, error) {
+	var interopPayload common.InteropPayload
+	if view.Meta.Protocol == common.Meta_FABRIC {
+		var fabricViewData fabric.FabricView
+		err := protoV2.Unmarshal(view.Data, &fabricViewData)
+		if err != nil {
+			return nil, fmt.Errorf("FabricView Unmarshal error: %s", err)
+		}
+		err = protoV2.Unmarshal(fabricViewData.Response.Payload, &interopPayload)
+		if err != nil {
+			return nil, fmt.Errorf("Unable to Unmarshal interopPayload: %s", err.Error())
+		}
+	} else if view.Meta.Protocol == common.Meta_CORDA {
+		var cordaViewData corda.ViewData
+		err := protoV2.Unmarshal(view.Data, &cordaViewData)
+		if err != nil {
+			return nil, fmt.Errorf("CordaView Unmarshal error: %s", err)
+		}
+		err = protoV2.Unmarshal(cordaViewData.Payload, &interopPayload)
+		if err != nil {
+			return nil, fmt.Errorf("Unable to Unmarshal interopPayload: %s", err.Error())
+		}
+	} else {
+		return nil, fmt.Errorf("Cannot extract data from view; unsupported DLT type: %+v", view.Meta.Protocol)
+	}
+
+	// If view data is encrypted, match it to supplied decrypted data using the hash in the view payload
+	if interopPayload.Confidential {
+		var confidentialPayload common.ConfidentialPayload
+		err := protoV2.Unmarshal(interopPayload.Payload, &confidentialPayload)
+		if err != nil {
+			return nil, fmt.Errorf("ConfidentialPayload Unmarshal error: %s", err)
+		}
+		viewB64ContentBytes, err := base64.StdEncoding.DecodeString(b64ViewContent)
+		if err != nil {
+			return nil, fmt.Errorf("Unable to base64 decode view content: %s", err.Error())
+		}
+		var confidentialPayloadContents common.ConfidentialPayloadContents
+		err = protoV2.Unmarshal(viewB64ContentBytes, &confidentialPayloadContents)
+		if err != nil {
+			return nil, fmt.Errorf("ConfidentialPayloadContents Unmarshal error: %s", err)
+		}
+		if confidentialPayload.HashType == common.ConfidentialPayload_HMAC {
+			payloadHMAC := hmac.New(sha256.New, confidentialPayloadContents.Random)
+			payloadHMAC.Write(confidentialPayloadContents.Payload)
+			payloadHMACBytes := payloadHMAC.Sum(nil)
+			if !bytes.Equal(confidentialPayload.Hash, payloadHMACBytes) {
+				return nil, fmt.Errorf("View payload hash does not match hash of data submitted by client")
+			}
+		} else {
+			return nil, fmt.Errorf("Unsupported hash type in interop view payload: %+v", confidentialPayload.HashType)
+		}
+		return confidentialPayloadContents.Payload, nil
+	} else {
+		return interopPayload.Payload, nil
+	}
+}
+
+// Validate view against address, and extract data (i.e., query response) from view
+func (s *SmartContract) ParseAndValidateView(ctx contractapi.TransactionContextInterface, address, b64ViewProto, b64ViewContent string) ([]byte, error) {
 	viewB64Bytes, err := base64.StdEncoding.DecodeString(b64ViewProto)
 	if err != nil {
-		return fmt.Errorf("Unable to base64 decode data: %s", err.Error())
+		return nil, fmt.Errorf("Unable to base64 decode data: %s", err.Error())
 	}
 	var view common.View
 	err = protoV2.Unmarshal(viewB64Bytes, &view)
 	if err != nil {
-		return fmt.Errorf("View Unmarshal error: %s", err)
+		return nil, fmt.Errorf("View Unmarshal error: %s", err)
 	}
-	// 1. Verify proofs that are returned
+
+	// 1. Verify proof
 	err = s.VerifyView(ctx, b64ViewProto, address)
 	if err != nil {
-		return fmt.Errorf("VerifyView error: %s", err)
+		log.Errorf("Proof obtained from foreign network for query '%s' is INVALID", address)
+		return nil, fmt.Errorf("VerifyView error: %s", err)
+	}
+
+	// 2. Extract response data for consumption by application chaincode
+	viewData, err := ExtractAndValidateDataFromView(&view, b64ViewContent)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("View data: %s\n", string(viewData))
+
+	return viewData, nil
+}
+
+// WriteExternalState flow is used to process a response from a foreign network for state.
+// 1. Verify Proofs that are returned
+// 2. Call application chaincode
+func (s *SmartContract) WriteExternalState(ctx contractapi.TransactionContextInterface, applicationID string, applicationChannel string, applicationFunction string, applicationArgs []string, argIndicesForSubstitution []int, addresses []string, b64ViewProtos []string, b64ViewContents []string) error {
+	if len(argIndicesForSubstitution) != len(addresses) {
+		return fmt.Errorf("Number of argument indices for substitution (%d) does not match number of addresses (%d)", len(argIndicesForSubstitution), len(addresses))
+	}
+	if len(addresses) != len(b64ViewProtos) {
+		return fmt.Errorf("Number of addresses (%d) does not match number of views (%d)", len(addresses), len(b64ViewProtos))
+	}
+	if len(addresses) != len(b64ViewContents) {
+		return fmt.Errorf("Number of addresses (%d) does not match number of view contents (%d)", len(addresses), len(b64ViewContents))
+	}
+
+	arr := append([]string{applicationFunction}, applicationArgs...)
+
+	// 1. Verify proofs that are returned
+	for i, argIndex := range argIndicesForSubstitution {
+		// Validate argument index
+		if argIndex >= len(applicationArgs) {
+			return fmt.Errorf("Index %d out of bounds of array (length %d)", argIndex, len(applicationArgs))
+		}
+		// Validate proof and extract view data
+		viewData, err := s.ParseAndValidateView(ctx, addresses[i], b64ViewProtos[i], b64ViewContents[i])
+		if err != nil {
+			return err
+		}
+		// Substitute argument in list with view data
+		arr[argIndex + 1] = string(viewData)        // First argument is the CC function name
 	}
 
 	// 2. Call application chaincode with created state as the argument
-	arr := append([]string{applicationFunction}, applicationArgs...)
 	byteArgs := strArrToBytesArr(arr)
-	byteArgs = append(byteArgs, view.Data)
 	log.Info(fmt.Sprintf("Calling invoke chaincode. AppId: %s, appChannel: %s", applicationID, applicationChannel))
 	pbResp := ctx.GetStub().InvokeChaincode(applicationID, byteArgs, applicationChannel)
 	if pbResp.Status != shim.OK {
@@ -85,7 +186,7 @@ func (s *SmartContract) VerifyView(ctx contractapi.TransactionContextInterface, 
 	case common.Meta_CORDA:
 		switch view.Meta.ProofType {
 		case "Notarization":
-			return verifyCordaNotarization(s, ctx, view.Data, verificationPolicy, addressStruct.LedgerSegment)
+			return verifyCordaNotarization(s, ctx, view.Data, verificationPolicy, addressStruct.LedgerSegment, address)
 		default:
 			return fmt.Errorf("Proof type not supported: %s", view.Meta.ProofType)
 		}
@@ -105,6 +206,8 @@ func (s *SmartContract) VerifyView(ctx contractapi.TransactionContextInterface, 
 	default:
 		return fmt.Errorf("Verification Error: Unrecognised protocol %s", view.Meta.Protocol)
 	}
+
+	// TODO: Somewhere, we need to validate the requestor certificate and the nonce within the InteropPayload
 }
 
 // The verifyCordaNotarization function is used to verify views that come from a Corda network
@@ -116,7 +219,7 @@ func (s *SmartContract) VerifyView(ctx contractapi.TransactionContextInterface, 
 // 3. Verify each of the signatures in the Notarization array according to the data bytes and certificate.
 // 4. Check the certificates are valid according to the Membership.
 // 5. Check the notarizations fulfill the verification policy of the request.
-func verifyCordaNotarization(s *SmartContract, ctx contractapi.TransactionContextInterface, data []byte, verificationPolicy *common.Policy, securityDomain string) error {
+func verifyCordaNotarization(s *SmartContract, ctx contractapi.TransactionContextInterface, data []byte, verificationPolicy *common.Policy, securityDomain, address string) error {
 	var cordaViewData corda.ViewData
 	err := protoV2.Unmarshal(data, &cordaViewData)
 	if err != nil {
@@ -158,6 +261,7 @@ func verifyCordaNotarization(s *SmartContract, ctx contractapi.TransactionContex
 			return fmt.Errorf("Notarizations missing signer: %s", signer)
 		}
 	}
+	log.Infof("Proof associated with response '%s' from Corda network for query '%s' is VALID", string(cordaViewData.Payload), address)
 	return nil
 }
 
@@ -230,5 +334,6 @@ func verifyFabricNotarization(s *SmartContract, ctx contractapi.TransactionConte
 			return fmt.Errorf("Notarizations missing signer: %s", signer)
 		}
 	}
+	log.Infof("Proof associated with response '%s' from Fabric network for query '%s' is VALID", string(fabricViewData.Response.Payload), address)
 	return nil
 }

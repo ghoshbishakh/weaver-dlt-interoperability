@@ -12,7 +12,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/hyperledger-labs/weaver-dlt-interoperability/core/network/fabric-interop-cc/contracts/interop/protos-go/common"
+	"github.com/hyperledger-labs/weaver-dlt-interoperability/common/protos-go/common"
+	wtest "github.com/hyperledger-labs/weaver-dlt-interoperability/core/network/fabric-interop-cc/libs/testutils"
 )
 
 var accessControlAsset = common.AccessControlPolicy{
@@ -26,7 +27,8 @@ var accessControlAsset = common.AccessControlPolicy{
 }
 
 func TestGetAccessControlPolicyBySecurityDomain(t *testing.T) {
-	ctx, chaincodeStub, interopcc := prepMockStub()
+	ctx, chaincodeStub := wtest.PrepMockStub()
+	interopcc := SmartContract{}
 
 	// Case when no access control policy is found
 	acString, getError := interopcc.GetAccessControlPolicyBySecurityDomain(ctx, "2345")
@@ -43,7 +45,8 @@ func TestGetAccessControlPolicyBySecurityDomain(t *testing.T) {
 }
 
 func TestCreateAccessControlPolicy(t *testing.T) {
-	ctx, chaincodeStub, interopcc := prepMockStub()
+	ctx, chaincodeStub := wtest.PrepMockStub()
+	interopcc := SmartContract{}
 
 	// Happy case. No existing access control policy is found creates one.
 	accessControlBytes, err := json.Marshal(&accessControlAsset)
@@ -60,7 +63,8 @@ func TestCreateAccessControlPolicy(t *testing.T) {
 }
 
 func TestUpdateAccessControlPolicy(t *testing.T) {
-	ctx, chaincodeStub, interopcc := prepMockStub()
+	ctx, chaincodeStub := wtest.PrepMockStub()
+	interopcc := SmartContract{}
 
 	// Case when no access control policy is found
 	accessControlBytes, err := json.Marshal(&accessControlAsset)
@@ -78,7 +82,8 @@ func TestUpdateAccessControlPolicy(t *testing.T) {
 }
 
 func TestDeleteAccessControlPolicy(t *testing.T) {
-	ctx, chaincodeStub, interopcc := prepMockStub()
+	ctx, chaincodeStub := wtest.PrepMockStub()
+	interopcc := SmartContract{}
 
 	// Case when a policy exists
 	chaincodeStub.GetStateReturns([]byte{}, nil)
@@ -97,7 +102,8 @@ func TestDeleteAccessControlPolicy(t *testing.T) {
 }
 
 func TestVerifyAccessToCC(t *testing.T) {
-	ctx, chaincodeStub, interopcc := prepMockStub()
+	ctx, chaincodeStub := wtest.PrepMockStub()
+	interopcc := SmartContract{}
 
 	// data for tests
 	validAddressStruct := FabricViewAddress{
@@ -121,7 +127,7 @@ func TestVerifyAccessToCC(t *testing.T) {
 
 	var rule = common.Rule{
 		Principal:     "cert",
-		PrincipalType: "ca",
+		PrincipalType: "certificate",
 		Resource:      "mychannel:interop:Read:a",
 		Read:          true,
 	}
@@ -139,6 +145,19 @@ func TestVerifyAccessToCC(t *testing.T) {
 	require.NoError(t, err)
 	newRule := common.Rule{
 		Principal:     "cert",
+		PrincipalType: "certificate",
+		Resource:      "mychannel:interop:Read:*",
+		Read:          true,
+	}
+	accessControlAsset.Rules = []*common.Rule{&newRule}
+	accessControlBytes, err = json.Marshal(&accessControlAsset)
+	require.NoError(t, err)
+	chaincodeStub.GetStateReturns(accessControlBytes, nil)
+	err = verifyAccessToCC(&interopcc, ctx, &validAddressStruct, viewAddressString, &query)
+	require.NoError(t, err)
+
+	newRule = common.Rule{
+		Principal:     "Org1MSP",
 		PrincipalType: "ca",
 		Resource:      "mychannel:interop:Read:*",
 		Read:          true,
@@ -153,6 +172,20 @@ func TestVerifyAccessToCC(t *testing.T) {
 	// Test: Invalid Cert
 	invalidPrincipalRule := common.Rule{
 		Principal:     "asdfasdf",
+		PrincipalType: "certificate",
+		Resource:      "mychannel:interop:Read:*",
+		Read:          true,
+	}
+	accessControlAsset.Rules = []*common.Rule{&invalidPrincipalRule}
+	accessControlBytes, err = json.Marshal(&accessControlAsset)
+	require.NoError(t, err)
+	chaincodeStub.GetStateReturns(accessControlBytes, nil)
+	err = verifyAccessToCC(&interopcc, ctx, &validAddressStruct, viewAddressString, &query)
+	require.EqualError(t, err, fmt.Sprintf("Access Control Policy DOES NOT PERMIT the request '%s' from '%s:%s'", viewAddressString, query.RequestingNetwork, query.Certificate))
+
+	// Test: Invalid CA
+	invalidPrincipalRule = common.Rule{
+		Principal:     "asdfasdf",
 		PrincipalType: "ca",
 		Resource:      "mychannel:interop:Read:*",
 		Read:          true,
@@ -162,7 +195,34 @@ func TestVerifyAccessToCC(t *testing.T) {
 	require.NoError(t, err)
 	chaincodeStub.GetStateReturns(accessControlBytes, nil)
 	err = verifyAccessToCC(&interopcc, ctx, &validAddressStruct, viewAddressString, &query)
-	require.EqualError(t, err, fmt.Sprintf("Access Control Policy DOES NOT PERMIT the following request: %s", viewAddressString))
+	require.EqualError(t, err, fmt.Sprintf("Access Control Policy DOES NOT PERMIT the request '%s' from '%s:%s'", viewAddressString, query.RequestingNetwork, query.Certificate))
+
+	// Test: No rule for requested resource
+	differentResourceRule := common.Rule{
+		Principal:     "Org1MSP",
+		PrincipalType: "ca",
+		Resource:      "mychannel:interop:ReadMe:*",
+		Read:          true,
+	}
+	accessControlAsset.Rules = []*common.Rule{&differentResourceRule}
+	accessControlBytes, err = json.Marshal(&accessControlAsset)
+	require.NoError(t, err)
+	chaincodeStub.GetStateReturns(accessControlBytes, nil)
+	err = verifyAccessToCC(&interopcc, ctx, &validAddressStruct, viewAddressString, &query)
+	require.EqualError(t, err, fmt.Sprintf("Access Control Policy DOES NOT PERMIT the request '%s' from '%s:%s'", viewAddressString, query.RequestingNetwork, query.Certificate))
+
+	differentResourceRule = common.Rule{
+		Principal:     "cert",
+		PrincipalType: "certificate",
+		Resource:      "mychannel:interop:ReadMe:*",
+		Read:          true,
+	}
+	accessControlAsset.Rules = []*common.Rule{&differentResourceRule}
+	accessControlBytes, err = json.Marshal(&accessControlAsset)
+	require.NoError(t, err)
+	chaincodeStub.GetStateReturns(accessControlBytes, nil)
+	err = verifyAccessToCC(&interopcc, ctx, &validAddressStruct, viewAddressString, &query)
+	require.EqualError(t, err, fmt.Sprintf("Access Control Policy DOES NOT PERMIT the request '%s' from '%s:%s'", viewAddressString, query.RequestingNetwork, query.Certificate))
 
 	// Test: No Rule for ID
 	chaincodeStub.GetStateReturns(nil, nil)

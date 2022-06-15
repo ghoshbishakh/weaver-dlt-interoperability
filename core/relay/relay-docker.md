@@ -60,7 +60,7 @@ The table below provides an overview of the configuration settings available:
 |:------------------------|:-------------:|:------|
 | `RELAY_CONFIG`          | `/opt/relay/config/server.toml` | This variables points to the expected location of the configuration file for the server. If there is no such file, the template file is used to generate it. |
 | `RELAY_CONFIG_TEMPLATE` | `/opt/relay/config/server.template.toml` | This variable is used in case, there is no supplied configuration file for the server. It is used to generate the actual configuration. |
-| `RELAY_DNS`             | `/opt/relay/config/relays` | This variables points to the path containing the information about remote relaysi configurations. The path should point to a directory that contains .toml files. Each of these file is a set of DNS entries that are added to the server configuration file.  This is an optional file and if present it is appended to the server configuration. |
+| `RELAY_DNS`             | `/opt/relay/config/relays` | This variables points to the path containing the information about remote relays' configurations. The path should point to a directory that contains .toml files. Each of these file is a set of DNS entries that are added to the server configuration file.  This is an optional file and if present it is appended to the server configuration. |
 | `RELAY_NAME`            | `Relay`       | This variable is used to specify the name of the relay, in the configuration file template. It has no use if there is a supplied configuration. |
 | `RELAY_PORT`            | `9080`        | This variable is used to specify the port the relay server listens on in the configuration file template. It has no use if there is a supplied configuration. |
 | `DRIVER_NAME`           | ---           | This variable is used to specify the name of the driver that the relay server is configured with in the configuration file template. It has no use if there is a supplied configuration. | 
@@ -92,7 +92,7 @@ The table below provides an overview of the configuration settings available:
 | `DRIVER_NAME`            | `DummyDriver` | __(NOT USED)__ This variable is used to specify the name of the driver in the configuration file template. It has no use if there is a supplied configuration. |
 | `DRIVER_PORT`            | `9081`        | This variable is used to specify the port the relay driver listens on in the configuration file template. It has no use if there is a supplied configuration. |
 | `RELAY_NAME`             | `Relay`       | This variable is used to specify the name of the relay server the driver is configured with in the configuration file template. It has no use if there is a supplied configuration. |
-| `RELAT_PORT`             | `9080`        | This variable is used to specify the port of the relay server the driver is configured with in the configuration file template. It has no use if there is a supplied configuration. |
+| `RELAY_PORT`             | `9080`        | This variable is used to specify the port of the relay server the driver is configured with in the configuration file template. It has no use if there is a supplied configuration. |
 | `RELAY_HOST`             | `relay-server`| This variable is used to specify the host of the relay server the driver is configured with in the configuration file template. It has no use if there is a supplied configuration. |
 | `NETWORK_NAME`           | `dummy`       | This variable is used to specify the name of the network the driver is proxying in the configuration file template. It has no use if there is a supplied configuration. |
 | `DEBUG`                  | ---           | This variable is used to activate the debug mode for the startup script. The debug mode will provide details about the actual configuration used by the relay server. |
@@ -144,14 +144,70 @@ This repository also contains a `docker-compose.yaml` file that is designed to s
 
 To run with Docker Compose please refer to the comments in the [docker-compose.yaml](docker-compose.yaml) file or the documentation above.
 
-**Some sample steps to deploy relay using docker-compose:**
+First **login** to github container registry:
 
-* Copy `.env.nw1.template` or `.env.corda.template` file to `.env` (depending upon whether relay is for fabric or corda), and make sure the values are accurate, update the paths accordingly.
+* Create a Personal Access Token with read packages access in github. Refer [Creating a Personal Access Token](https://docs.github.com/en/github/authenticating-to-github/keeping-your-account-and-data-secure/creating-a-personal-access-token) for help.
+* Run `docker login ghcr.io` and use your github username and personal access token as password.
+
+**Some sample steps to deploy relay using docker-compose when Config File is available:**
+
+* Copy `.env.template` file to `.env`.
+* Keep following Environment Variables in `.env` and delete/ignore rest:
+    * PATH_TO_CONFIG: Path to the relay's config file. e.g. `./config/Fabric_Relay.toml`.
+    * RELAY_NAME: It's the `name` parameter in the config file. Same is used for container name.
+    * RELAY_PORT: Port for grpc relay server.
+    * EXTERNAL_NETWORK: Docker bridge network name.
+    * DOCKER_IMAGE_NAME: Keep it same as in template.
+    * DOCKER_TAG: Tag of the image in github registry. Check here: [weaver-relay-server](https://github.com/hyperledger-labs/weaver-dlt-interoperability/pkgs/container/weaver-relay-server)
+* Tip: If running all relays on same host, make sure to change service name before each relay deployment, to avoid conflict in names.
+* Run `make convert-compose-method1`.
+* Create docker network named `relay`: `docker network create relay`.
+* To deploy relay, run: `docker-compose up relay-server -d` (Given relay-server is the service name in docker-compose).
+* Also `make start-server` does the above 2 steps, if service name is not changed.
+
+**Some sample steps to deploy relay using docker-compose when Config is not available:**
+
+* Copy `.env.template.2` file to `.env`.
+* Configure the following environment variables in `.env` and delete (or ignore) the rest:
+  * `RELAY_NAME`: Name for the relay. Same is used for container name.
+  * `RELAY_PORT`: Port for grpc relay server.
+  * `DRIVER_NAME`: Driver host name.
+  * `DRIVER_PORT`: Port for driver.
+  * `DRIVER_HOST`: Hostname/IP for driver.
+  * `NETWORK_NAME`: Name of network it will be attached to (should be same as used in relay requests arguments.)
+  * `NETWORK_TYPE`: Type of network. e.g. `Fabric` or `Corda`.
+  * `PATH_TO_REMOTE_RELAYS_DEFINITIONS`: Should point to a directory which stores one or more `*.toml` files, which contain DNS information regarding remote relays. Examples are as follows:
+    * The `relays.toml` in [./docker/remote-relay-dns-config](./docker/remote-relay-dns-config) contains connectivity specs for non-TLS-enabled relays.
+    * The `relays.toml` in [./docker/remote-relay-dns-config-tls](./docker/remote-relay-dns-config-tls) contains connectivity specs for TLS-enabled relays.
+  * `EXTERNAL_NETWORK`: Docker bridge network name.
+  * `DOCKER_IMAGE_NAME`: Keep it same as in template.
+  * `DOCKER_TAG`: Tag of the image in github registry. Check here: [weaver-relay-server](https://github.com/hyperledger-labs/weaver-dlt-interoperability/pkgs/container/weaver-relay-server)
+  * `RELAY_TLS`: Boolean flag indicating whether or not the relay requires TLS connections
+  * `RELAY_TLS_CERT_PATH`: TLS certificate path
+  * `RELAY_TLS_KEY_PATH`: TLS private key path
+  * `DRIVER_TLS`: Boolean flag indicating whether or not the local driver requires TLS connections
+  * `DRIVER_TLSCA_CERT_PATH`: Local driver's TLS CA certificate path
+* The following sample files in [./docker/testnet-envs/](./docker/testnet-envs/) can be used and tweaked for relays associated with particular testnets:
+  * Fabric `network1`: `.env.n1` (non-TLS) and `.env.n1.tls` (TLS)
+  * Fabric `network2`: `.env.n2` (non-TLS) and `.env.n2.tls` (TLS)
+  * Corda `Corda_Network`: `.env.corda` (non-TLS) and `.env.corda.tls` (TLS)
+  * Corda `Corda_Network2`: `.env.corda2` (non-TLS) and `.env.corda2.tls` (TLS)
+
+* Modify `docker/remote-relay-dns-config/relays.toml` to add remote relays' dns information.
+* Run `make convert-compose-method2`.
 * Tip: If running all relays on same host, make sure to change service name before each relay deployment, to avoid conflict in names.
 * Create docker network named `relay`: `docker network create relay`.
 * To deploy relay, run: `docker-compose up relay-server -d` (Given relay-server is the service name in docker-compose).
-* Also `make start` does the above 2 steps, if service name is not changed.
-* Modify `docker/remote-relay-dns-config` in case relay names or container host names or ports are changed from default provided in template env files.
+* Also `make start-server` does the above 2 steps, if service name is not changed.
+
+## Push Relay image to Github container registry
+
+* Create a Personal Access Token with write, read, and delete packages access in github. Refer [Creating a Personal Access Token](https://docs.github.com/en/github/authenticating-to-github/keeping-your-account-and-data-secure/creating-a-personal-access-token) for help.
+* Run `docker login ghcr.io` and use your github username and personal access token as password.
+* Run `make push-server` to build and push the image to github registry.
+
+**NOTE:** Push image to `hyperledger-labs` only after PR approval, first test it by deploying it on your fork by running (instead of last step above): `make push-image DOCKER_REGISTRY=ghcr.io/<username>`, where replace `<username>` with your git username.
+
 
 
 

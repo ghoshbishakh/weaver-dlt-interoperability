@@ -28,7 +28,7 @@ If you are ok with the default configuration you can simply use the default make
 If you want to be able to have more control on the setup and configuration of the network, proceed to read the next section and 
 use the capabilities of the underlying script `network.sh`.
 
-NOTE: For runnining inteorp setup/start scripts you will need to set up artifactory properties in the `shared` directory. 
+NOTE: For runnining inteorp setup/start scripts you will need to set up github properties in the `shared` directory. 
 
 ## Running via network.sh
 
@@ -105,6 +105,13 @@ To Deploy the chaincode, follow the below steps.
    
    ```
    N1_PEER_PORT=XXXX network.sh ...
+   ```
+
+   To instantiate the Fabric Interoperation Chaincode on a channel within either network,
+   specify the environment variable `E2E_CONFIDENTIALITY` as `true` in the command line.
+   For example:
+   ```
+   E2E_CONFIDENTIALITY=true make start-interop
    ```
 
 ### Troubleshooting

@@ -14,9 +14,10 @@ import (
 	"github.com/hyperledger/fabric-chaincode-go/shim"
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 	log "github.com/sirupsen/logrus"
+	wutils "github.com/hyperledger-labs/weaver-dlt-interoperability/core/network/fabric-interop-cc/libs/utils"
 )
 
-const applicationCCKey = "applicationccid"
+const e2eConfidentialityKey = "e2eConfidentialityFlag"
 
 // SmartContract provides functions for managing arbitrary key-value pairs
 type SmartContract struct {
@@ -36,32 +37,45 @@ func init() {
 // call the application chaincode.
 func (s *SmartContract) InitLedger(ctx contractapi.TransactionContextInterface) error {
 	var err error
+	var confFlag string
 
 	_, args := ctx.GetStub().GetFunctionAndParameters()
 
-	if len(args) != 1 {
-		err = fmt.Errorf("Incorrect number of arguments. Expecting 1: {APPLICATION Chaincode ID/hash}. Found %d", len(args))
-		fmt.Printf("Error %s", err.Error())
-		return err
+	if len(args) > 1 {
+		confFlag = "true"
+	} else {
+		confFlag = "false"
+	}
+	err = ctx.GetStub().PutState(e2eConfidentialityKey, []byte(confFlag))
+	if err != nil {
+		errMsg := fmt.Sprintf("Error saving E2E-Confidentiality Flag: %s", err.Error())
+		fmt.Printf(errMsg)
+		return errors.New(errMsg)
 	}
 
-	err = ctx.GetStub().PutState(applicationCCKey, []byte(args[0]))
+	// Infer local chaincode ID
+	localCCId, err := wutils.GetLocalChaincodeID(ctx.GetStub())
 	if err != nil {
-		errMsg := fmt.Sprintf("Error saving APPLICATION ID: %s", err.Error())
+		errMsg := fmt.Sprintf("Error getting this chaincode's ID: %s", err.Error())
+		fmt.Printf(errMsg)
+		return errors.New(errMsg)
+	}
+	// Record local chaincode ID for lookup during asset lock management
+	err = ctx.GetStub().PutState(wutils.GetLocalChaincodeIDKey(), []byte(localCCId))
+	if err != nil {
+		errMsg := fmt.Sprintf("Error saving this chaincode's ID: %s", err.Error())
+		fmt.Printf(errMsg)
+		return errors.New(errMsg)
+	}
+	// This is the Interop chaincode; record its ID for lookup during asset lock management
+	err = ctx.GetStub().PutState(wutils.GetInteropChaincodeIDKey(), []byte(localCCId))
+	if err != nil {
+		errMsg := fmt.Sprintf("Error saving this chaincode's ID: %s", err.Error())
 		fmt.Printf(errMsg)
 		return errors.New(errMsg)
 	}
 
 	return nil
-}
-
-// GetApplicationID retrieves the app CC id from the ledger
-func (s *SmartContract) GetApplicationID(ctx contractapi.TransactionContextInterface) (string, error) {
-	bytes, err := ctx.GetStub().GetState(applicationCCKey)
-	if err != nil {
-		return "", err
-	}
-	return string(bytes), nil
 }
 
 func main() {
